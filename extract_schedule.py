@@ -4,12 +4,9 @@ import pytesseract
 import cv2
 import pandas as pd
 import numpy as np
-import os
 import shutil
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-# Default Windows Tesseract path; system install will be preferred if available
-default_tesseract_path = r"C:\Users\dylan.thach\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 INPUT_IMAGE    = "rooftop_schedule.png"
 FLAT_IMAGE     = "flat_schedule.png"
 DEBUG_BW       = "debug_bw.png"
@@ -19,22 +16,16 @@ UPSCALE_FACTOR = 2
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 def setup_tesseract():
-    """Locate the tesseract executable: prefer system install over Windows fallback."""
-    # Prefer system tesseract if on PATH
+    """Ensure Tesseract is available and configure pytesseract."""
     tess_cmd = shutil.which("tesseract")
-    if tess_cmd:
-        pytesseract.pytesseract.tesseract_cmd = tess_cmd
-    # Otherwise use Windows-default path if it exists
-    elif os.path.exists(default_tesseract_path):
-        pytesseract.pytesseract.tesseract_cmd = default_tesseract_path
-    else:
+    if not tess_cmd:
         raise FileNotFoundError(
-            "Tesseract executable not found. Install it or update default_tesseract_path."
+            "Tesseract executable not found. Please install tesseract-ocr via 'sudo apt-get install tesseract-ocr'."
         )
+    pytesseract.pytesseract.tesseract_cmd = tess_cmd
 
 # ─── Image Preprocessing ─────────────────────────────────────────────────────
 def flatten_image(input_path, flat_path):
-    """Remove any alpha channel by compositing onto a white background."""
     im = Image.open(input_path)
     if im.mode == "RGBA":
         bg = Image.new("RGB", im.size, (255,255,255))
@@ -43,14 +34,10 @@ def flatten_image(input_path, flat_path):
         return cv2.imread(flat_path)
     return cv2.imread(input_path)
 
-
 def upscale_image(img, factor):
-    """Double the resolution for sharper OCR."""
     return cv2.resize(img, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
 
-
 def threshold_image(gray):
-    """Adaptive threshold for high-contrast binary image."""
     bw = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -62,25 +49,32 @@ def threshold_image(gray):
 
 # ─── Grid-Line Removal ───────────────────────────────────────────────────────
 def remove_grid_lines(bw, img_shape):
-    """Strip away table lines via morphological opening."""
-    horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (img_shape[1]//30, 1))
-    vert_kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (1, img_shape[0]//30))
-    horiz = cv2.morphologyEx(bw, cv2.MORPH_OPEN, horiz_kernel, iterations=2)
-    vert  = cv2.morphologyEx(bw, cv2.MORPH_OPEN, vert_kernel,  iterations=2)
+    horiz = cv2.morphologyEx(
+        bw, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (img_shape[1]//30, 1)),
+        iterations=2
+    )
+    vert  = cv2.morphologyEx(
+        bw, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (1, img_shape[0]//30)),
+        iterations=2
+    )
     clean = cv2.bitwise_xor(bw, cv2.bitwise_or(horiz, vert))
     cv2.imwrite(DEBUG_CLEAN, clean)
     return clean
 
 # ─── Cell Detection ──────────────────────────────────────────────────────────
 def dilate_image(clean):
-    """Merge text into connected blobs for contour detection."""
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
-    return cv2.dilate(clean, kernel, iterations=1)
-
+    return cv2.dilate(
+        clean,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (5,5)),
+        iterations=1
+    )
 
 def find_cells(dilated):
-    """Detect and sort bounding boxes for each table cell."""
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
     cells = []
     for cnt in contours:
         x,y,w,h = cv2.boundingRect(cnt)
@@ -91,30 +85,29 @@ def find_cells(dilated):
 
 # ─── OCR & Table Assembly ────────────────────────────────────────────────────
 def ocr_cells(cells, gray):
-    """Perform OCR on each cell and build a 2D list of text rows."""
     if not cells:
-        raise RuntimeError("No cells detected — check debug images.")
-    table, current_y, row = [], cells[0][0], []
+        raise RuntimeError("No cells detected. Check debug images.")
+    table = []
+    current_y, row = cells[0][0], []
     for y,x,w,h in cells:
         if abs(y - current_y) > h//2:
             table.append(row)
             row = []
             current_y = y
-        cell = gray[y:y+h, x:x+w]
-        cell = 255 - cell  # invert for OCR
-        text = pytesseract.image_to_string(cell, config="--psm 7").strip().replace("\n"," ")
-        row.append(text or "")
+        cell_img = 255 - gray[y:y+h, x:x+w]
+        text = pytesseract.image_to_string(cell_img, config="--psm 7").strip().replace("\n"," ")
+        row.append(text)
     table.append(row)
     return table
 
-# ─── Table Normalization & Save ──────────────────────────────────────────────
+# ─── Normalize & Save ────────────────────────────────────────────────────────
 def normalize_and_save(table, output_csv):
-    """Pad rows to equal length and save as CSV."""
-    col_count = max(len(r) for r in table)
-    header = table[0] + [f"col_{i}" for i in range(len(table[0]), col_count)]
-    data = [r + [""]*(col_count - len(r)) for r in table[1:]]
-    pd.DataFrame(data, columns=header).to_csv(output_csv, index=False)
-    print(f"✅ Saved {output_csv} with {col_count} columns.")
+    max_cols = max(len(r) for r in table)
+    header = table[0] + [f"col_{i}" for i in range(len(table[0]), max_cols)]
+    rows = [r + [""]*(max_cols - len(r)) for r in table[1:]]
+    df = pd.DataFrame(rows, columns=header)
+    df.to_csv(output_csv, index=False)
+    print(f"✅ Saved {output_csv} with {max_cols} columns.")
 
 # ─── Main ───────────────────────────────────────────────────────────────────
 def main():
@@ -124,8 +117,8 @@ def main():
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     bw = threshold_image(gray)
     clean = remove_grid_lines(bw, img.shape)
-    dil = dilate_image(clean)
-    cells = find_cells(dil)
+    dilated = dilate_image(clean)
+    cells = find_cells(dilated)
     table = ocr_cells(cells, gray)
     normalize_and_save(table, OUTPUT_CSV)
 
