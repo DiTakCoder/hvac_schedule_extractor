@@ -15,6 +15,7 @@ UPSCALE_FACTOR = 2
 
 # ─── Image Preprocessing ─────────────────────────────────────────────────────
 def flatten_image(input_path, flat_path):
+    """Remove alpha channel by compositing onto white."""
     im = Image.open(input_path)
     if im.mode == "RGBA":
         bg = Image.new("RGB", im.size, (255,255,255))
@@ -25,10 +26,12 @@ def flatten_image(input_path, flat_path):
 
 
 def upscale_image(img, factor):
+    """Resize for crisper OCR."""
     return cv2.resize(img, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
 
 
 def threshold_image(gray):
+    """Adaptive threshold for binary image."""
     bw = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -40,6 +43,7 @@ def threshold_image(gray):
 
 # ─── Grid-Line Removal ───────────────────────────────────────────────────────
 def remove_grid_lines(bw, img_shape):
+    """Remove table lines via morphological opening."""
     horiz = cv2.morphologyEx(
         bw, cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (img_shape[1]//30, 1)),
@@ -56,6 +60,7 @@ def remove_grid_lines(bw, img_shape):
 
 # ─── Cell Detection ──────────────────────────────────────────────────────────
 def dilate_image(clean):
+    """Merge text into blobs for contour detection."""
     return cv2.dilate(
         clean,
         cv2.getStructuringElement(cv2.MORPH_RECT, (5,5)),
@@ -64,6 +69,7 @@ def dilate_image(clean):
 
 
 def find_cells(dilated):
+    """Detect and sort each cell's bounding box."""
     contours, _ = cv2.findContours(
         dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
@@ -77,6 +83,7 @@ def find_cells(dilated):
 
 # ─── OCR & Table Assembly Using EasyOCR ────────────────────────────────────────
 def ocr_cells(cells, gray):
+    """Run OCR on each cell and build a 2D list of text rows."""
     if not cells:
         raise RuntimeError("No cells detected. Check debug images.")
     reader = easyocr.Reader(['en'], gpu=False)
@@ -88,15 +95,15 @@ def ocr_cells(cells, gray):
             row = []
             current_y = y
         cell_img = gray[y:y+h, x:x+w]
-        cell_img = cv2.cvtColor(cell_img, cv2.COLOR_GRAY2RGB)
-        texts = reader.readtext(cell_img, detail=0)
-        text = " ".join(texts).strip()
-        row.append(text)
+        cell_rgb = cv2.cvtColor(cell_img, cv2.COLOR_GRAY2RGB)
+        texts = reader.readtext(cell_rgb, detail=0)
+        row.append(" ".join(texts).strip())
     table.append(row)
     return table
 
 # ─── Normalize & Save ────────────────────────────────────────────────────────
 def normalize_and_save(table, output_csv):
+    """Pad rows and save table as CSV."""
     max_cols = max(len(r) for r in table)
     header = table[0] + [f"col_{i}" for i in range(len(table[0]), max_cols)]
     rows = [r + [""] * (max_cols - len(r)) for r in table[1:]]
