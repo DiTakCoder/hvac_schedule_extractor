@@ -4,10 +4,12 @@ import pytesseract
 import cv2
 import pandas as pd
 import numpy as np
+import os
+import shutil
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-
-TESSERACT_PATH = r"C:\Users\dylan.thach\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+# Windows fallback path; if run on Linux, we'll auto-detect tesseract in PATH
+default_tesseract_path = r"C:\Users\dylan.thach\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 INPUT_IMAGE    = "rooftop_schedule.png"
 FLAT_IMAGE     = "flat_schedule.png"
 DEBUG_BW       = "debug_bw.png"
@@ -16,10 +18,18 @@ OUTPUT_CSV     = "rooftop_schedule.csv"
 UPSCALE_FACTOR = 2
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
-
 def setup_tesseract():
-    """Point pytesseract at the installed tesseract.exe."""
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+    """Locate tesseract executable automatically, fallback to Windows path."""
+    # try system PATH first
+    tess_cmd = shutil.which("tesseract")
+    if tess_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tess_cmd
+    elif os.path.exists(default_tesseract_path):
+        pytesseract.pytesseract.tesseract_cmd = default_tesseract_path
+    else:
+        raise FileNotFoundError(
+            "Tesseract executable not found. Install OCR or update default_tesseract_path."
+        )
 
 # ─── Image Preprocessing ─────────────────────────────────────────────────────
 
@@ -34,9 +44,11 @@ def flatten_image(input_path, flat_path):
     else:
         return cv2.imread(input_path)
 
+
 def upscale_image(img, factor):
     """Resize the image by the given upscale factor."""
     return cv2.resize(img, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
+
 
 def threshold_image(gray):
     """Adaptive threshold to get a clean binary image."""
@@ -72,6 +84,7 @@ def dilate_image(clean):
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
     return cv2.dilate(clean, kernel, iterations=1)
 
+
 def find_cells(dilated):
     """Find and sort bounding boxes of each cell."""
     contours, _ = cv2.findContours(
@@ -94,12 +107,10 @@ def ocr_cells(cells, gray):
     table = []
     current_y, row = cells[0][0], []
     for y,x,w,h in cells:
-        # new row when Y jumps by half cell-height
         if abs(y - current_y) > h//2:
             table.append(row)
             row = []
             current_y = y
-        # prepare cell for OCR
         cell_img = gray[y:y+h, x:x+w]
         cell_img = 255 - cell_img  # invert background/text
         text = pytesseract.image_to_string(
@@ -112,26 +123,16 @@ def ocr_cells(cells, gray):
 # ─── Table Normalization & Save ──────────────────────────────────────────────
 
 def normalize_and_save(table, output_csv):
-    """
-    Pad header & rows so they all have the same width,
-    then save to CSV.
-    """
-    # determine max columns
+    """Pad header & rows so they all have the same width, then save to CSV."""
     col_count = max(len(r) for r in table)
-
-    # pad header
     header = table[0]
     if len(header) < col_count:
         header += [f"col_{i}" for i in range(len(header), col_count)]
-
-    # pad each data row
     data_rows = []
     for row in table[1:]:
         if len(row) < col_count:
             row += [""] * (col_count - len(row))
         data_rows.append(row)
-
-    # build DataFrame & save
     df = pd.DataFrame(data_rows, columns=header)
     df.to_csv(output_csv, index=False)
     print(f"✅ Saved {output_csv} with {col_count} columns.")
@@ -143,12 +144,10 @@ def main():
     img = flatten_image(INPUT_IMAGE, FLAT_IMAGE)
     img = upscale_image(img, UPSCALE_FACTOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     bw    = threshold_image(gray)
     clean = remove_grid_lines(bw, img.shape)
     dil   = dilate_image(clean)
     cells = find_cells(dil)
-
     table = ocr_cells(cells, gray)
     normalize_and_save(table, OUTPUT_CSV)
 
