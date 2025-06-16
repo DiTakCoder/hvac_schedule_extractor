@@ -91,7 +91,7 @@ def ocr_cells(cells, gray):
     current_y, row = cells[0][0], []
     for y, x, w, h in cells:
         if abs(y - current_y) > h // 2:
-            table.append(row)
+            table.append(row);
             row = []
             current_y = y
         cell_img = gray[y:y+h, x:x+w]
