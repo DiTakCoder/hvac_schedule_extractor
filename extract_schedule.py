@@ -8,7 +8,7 @@ import os
 import shutil
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-# Windows fallback path; if run on Linux, we'll auto-detect tesseract in PATH
+# We'll auto-detect tesseract in PATH on Linux/Codespaces, fallback to Windows path
 default_tesseract_path = r"C:\Users\dylan.thach\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 INPUT_IMAGE    = "rooftop_schedule.png"
 FLAT_IMAGE     = "flat_schedule.png"
@@ -19,7 +19,7 @@ UPSCALE_FACTOR = 2
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 def setup_tesseract():
-    """Locate tesseract executable automatically, fallback to Windows path."""
+    """Locate tesseract executable: prefer system binary, else Windows fallback."""
     # try system PATH first
     tess_cmd = shutil.which("tesseract")
     if tess_cmd:
@@ -32,7 +32,6 @@ def setup_tesseract():
         )
 
 # ─── Image Preprocessing ─────────────────────────────────────────────────────
-
 def flatten_image(input_path, flat_path):
     """Remove any alpha channel by compositing onto white."""
     im = Image.open(input_path)
@@ -41,8 +40,7 @@ def flatten_image(input_path, flat_path):
         bg.paste(im, mask=im.split()[3])
         bg.save(flat_path)
         return cv2.imread(flat_path)
-    else:
-        return cv2.imread(input_path)
+    return cv2.imread(input_path)
 
 
 def upscale_image(img, factor):
@@ -62,7 +60,6 @@ def threshold_image(gray):
     return bw
 
 # ─── Grid-Line Removal ───────────────────────────────────────────────────────
-
 def remove_grid_lines(bw, img_shape):
     """Remove horizontal and vertical lines via morphological opening."""
     horiz_kernel = cv2.getStructuringElement(
@@ -78,7 +75,6 @@ def remove_grid_lines(bw, img_shape):
     return clean
 
 # ─── Cell Detection ──────────────────────────────────────────────────────────
-
 def dilate_image(clean):
     """Light dilation to merge each cell’s text into one connected component."""
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
@@ -99,7 +95,6 @@ def find_cells(dilated):
     return cells
 
 # ─── OCR & Table Assembly ────────────────────────────────────────────────────
-
 def ocr_cells(cells, gray):
     """Run OCR on each detected cell and build a 2D list of strings."""
     if not cells:
@@ -121,7 +116,6 @@ def ocr_cells(cells, gray):
     return table
 
 # ─── Table Normalization & Save ──────────────────────────────────────────────
-
 def normalize_and_save(table, output_csv):
     """Pad header & rows so they all have the same width, then save to CSV."""
     col_count = max(len(r) for r in table)
@@ -138,7 +132,6 @@ def normalize_and_save(table, output_csv):
     print(f"✅ Saved {output_csv} with {col_count} columns.")
 
 # ─── Main ───────────────────────────────────────────────────────────────────
-
 def main():
     setup_tesseract()
     img = flatten_image(INPUT_IMAGE, FLAT_IMAGE)
