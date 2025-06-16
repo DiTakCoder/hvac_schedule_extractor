@@ -6,9 +6,10 @@ import pandas as pd
 import numpy as np
 import os
 import shutil
+import platform
 
 # ─── Configuration ─────────────────────────────────────────────────────────────
-# We'll auto-detect tesseract in PATH on Linux/Codespaces, fallback to Windows path
+# On Linux or Codespaces, use the `tesseract` binary; on Windows, fallback to full path
 default_tesseract_path = r"C:\Users\dylan.thach\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 INPUT_IMAGE    = "rooftop_schedule.png"
 FLAT_IMAGE     = "flat_schedule.png"
@@ -19,8 +20,12 @@ UPSCALE_FACTOR = 2
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 def setup_tesseract():
-    """Locate tesseract executable: prefer system binary, else Windows fallback."""
-    # try system PATH first
+    """Configure pytesseract to point at the correct tesseract executable."""
+    # On non-Windows, assume 'tesseract' is in PATH
+    if platform.system() != 'Windows':
+        pytesseract.pytesseract.tesseract_cmd = 'tesseract'
+        return
+    # On Windows, try PATH then fallback
     tess_cmd = shutil.which("tesseract")
     if tess_cmd:
         pytesseract.pytesseract.tesseract_cmd = tess_cmd
